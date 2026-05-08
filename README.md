@@ -1,7 +1,7 @@
+> **Note:** This is an unofficial fork of [https://github.com/NVIDIA/soma-retargeter](https://github.com/NVIDIA/soma-retargeter).
+
 # SOMA Retargeter
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-
-> **Note:** This is an unofficial fork of [https://github.com/NVIDIA/soma-retargeter](https://github.com/NVIDIA/soma-retargeter).
 
 ![SOMA Retargeter Banner](assets/docs/banner.gif)
 
