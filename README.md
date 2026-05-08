@@ -15,8 +15,8 @@ SOMA Retargeter is part of the [SOMA body model](https://github.com/NVlabs/SOMA-
 
 ## Requirements
 
-- **Python:** 3.12
-- **Git LFS:** Installed and initialized for asset downloads
+- **Python:** 3.10, 3.11, or 3.12 (upstream tested on 3.12; 3.10/3.11 supported via relaxed numpy/scipy pins)
+- **Git LFS:** Installed and initialized for asset downloads (only needed when working from source)
 - **OS:** Windows (x86-64) and Linux (x86-64, aarch64)
 - **GPU:** NVIDIA GPU (Maxwell or newer), driver 545+ (CUDA 12). No local CUDA Toolkit installation required.
 
@@ -31,7 +31,7 @@ soma-bvh-to-csv --help
 
 This installs the `soma_retargeter` Python package and the `soma-bvh-to-csv` console script. The default retargeting config and the SOMA zero-frame BVH ship inside the wheel, so no LFS checkout is needed for the standard pipeline.
 
-Runtime requirements: Python 3.12, NVIDIA GPU (Maxwell or newer), driver 545+.
+Runtime requirements: Python 3.10/3.11/3.12, NVIDIA GPU (Maxwell or newer), driver 545+.
 
 <details>
 
