@@ -3,7 +3,7 @@ requires = ["setuptools >= 64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "soma_retargeter"
+name = "eden-soma-retargeter"
 dynamic = ["version"]
 license = "Apache-2.0"
 license-files = ["LICENSE", "licenses/**/*.txt"]
@@ -22,10 +22,12 @@ dependencies = [
     "tqdm==4.67.3",
 ]
 
+[project.scripts]
+soma-bvh-to-csv = "soma_retargeter.app.bvh_to_csv_converter:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["soma_retargeter*"]
-exclude = ["app*", "assets*", "submodules*"]
 
 [tool.setuptools.package-data]
 soma_retargeter = ["configs/**/*.json", "configs/**/*.bvh", "configs/**/*.usd"]

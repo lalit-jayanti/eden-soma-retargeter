@@ -1,6 +1,8 @@
 # SOMA Retargeter
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
+> **Note:** This is an unofficial fork of [https://github.com/NVIDIA/soma-retargeter](https://github.com/NVIDIA/soma-retargeter).
+
 ![SOMA Retargeter Banner](assets/docs/banner.gif)
 
 Convert [SOMA](https://github.com/NVlabs/SOMA-X) human motion captures into humanoid robot joint animation. Takes BVH motion files as input and produces robot-playable CSV joint data as output using GPU-optimized inverse kinematics via [Newton](https://github.com/newton-physics/newton) and high-performance computation with [NVIDIA Warp](https://github.com/NVIDIA/warp).
@@ -20,9 +22,22 @@ SOMA Retargeter is part of the [SOMA body model](https://github.com/NVlabs/SOMA-
 
 ## Installation
 
+### From PyPI (recommended)
+
+```bash
+pip install eden-soma-retargeter
+soma-bvh-to-csv --help
+```
+
+This installs the `soma_retargeter` Python package and the `soma-bvh-to-csv` console script. The default retargeting config and the SOMA zero-frame BVH ship inside the wheel, so no LFS checkout is needed for the standard pipeline.
+
+Runtime requirements: Python 3.12, NVIDIA GPU (Maxwell or newer), driver 545+.
+
 <details>
 
-<summary>Setup instructions</summary>
+<summary>From source (for contributors)</summary>
+
+LFS only needs to be pulled if you plan to use the sample motions in `assets/motions/` or rebuild the docs in `assets/docs/`. The wheel itself bundles only the default config and the SOMA zero-frame BVH that already live under `soma_retargeter/configs/`.
 
 ### Method 1 (conda + pip)
 
@@ -85,12 +100,18 @@ For large-scale motion data, see the [SEED dataset](https://huggingface.co/datas
 
 ## Quick Start
 
-> When using **uv** (Method 2), replace `python` with `uv run` in the commands below.
+> When using **uv**, replace `soma-bvh-to-csv` with `uv run soma-bvh-to-csv` in the commands below.
 
 ### Interactive viewer (OpenGL)
 
 ```bash
-python ./app/bvh_to_csv_converter.py --config ./assets/default_bvh_to_csv_converter_config.json --viewer gl
+soma-bvh-to-csv --viewer gl
+```
+
+This uses the bundled default config. To override:
+
+```bash
+soma-bvh-to-csv --config ./my_config.json --viewer gl
 ```
 
 ![Interactive viewer interface](assets/docs/interactive-viewer-screenshot.png)
@@ -102,30 +123,31 @@ The viewer displays the source SOMA motion alongside the retargeted robot in a 3
 Process a folder of BVH files without a display. Set `import_folder` and `export_folder` in the config file, then run:
 
 ```bash
-python ./app/bvh_to_csv_converter.py --config ./assets/default_bvh_to_csv_converter_config.json --viewer null
+soma-bvh-to-csv --config ./my_config.json --viewer null
 ```
 
 Batch mode recursively finds all `.bvh` files in the import folder, processes them in configurable batch sizes, and writes CSV files to the export folder mirroring the input directory structure.
 
+The same entry point is also reachable as a Python module, useful for embedding in other tools:
+
+```bash
+python -m soma_retargeter.app.bvh_to_csv_converter --viewer null
+```
+
 ## Code Overview
-
-### `app/`
-
-| File | Description |
-|------|-------------|
-| `bvh_to_csv_converter.py` | Main entry point. Drives both interactive and headless batch retargeting modes. |
 
 ### `soma_retargeter/`
 
 | Module | Description |
 |--------|-------------|
+| `app/bvh_to_csv_converter.py` | Main entry point (also exposed as the `soma-bvh-to-csv` console script). Drives both interactive and headless batch retargeting modes. |
 | `animation/` | Core data structures for skeletons, animation buffers, IK, and skinned meshes. |
 | `assets/` | File I/O for BVH, CSV, and USD formats. |
 | `pipelines/` | Retargeting pipeline: IK solving, feet stabilization, and joint limit clamping. |
 | `robotics/` | Human-to-robot scaling and robot output formatting. |
 | `renderers/` | Visualization for the interactive viewer. |
 | `utils/` | Math, pose, coordinate conversion, Newton and Warp helpers. |
-| `configs/` | JSON configuration for retargeting, scaling, and feet stabilization parameters. |
+| `configs/` | JSON configuration for retargeting, scaling, and feet stabilization parameters, plus the default `default_bvh_to_csv_converter_config.json` shipped with the wheel. |
 
 ## Related Work
 

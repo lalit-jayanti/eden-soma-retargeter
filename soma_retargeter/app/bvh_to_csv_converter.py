@@ -7,6 +7,7 @@ import newton
 import pathlib
 import time
 import warp as wp
+from importlib.resources import files as _pkg_files
 
 import soma_retargeter.utils.math_utils as math_utils
 import soma_retargeter.assets.bvh as bvh_utils
@@ -484,7 +485,8 @@ def main():
     parser.add_argument(
         "--config",
         type=lambda x: None if x == "None" else str(x),
-        default="./assets/default_bvh_to_csv_converter_config.json",
+        default=str(_pkg_files("soma_retargeter.configs")
+                    / "default_bvh_to_csv_converter_config.json"),
         help="Input json config file.")
 
     viewer, args = newton.examples.init(parser)
