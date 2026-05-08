@@ -21,6 +21,7 @@ dependencies = [
     "scipy==1.17.1",
     "tqdm==4.67.3",
 ]
+readme = "README.md"
 
 [project.scripts]
 soma-bvh-to-csv = "soma_retargeter.app.bvh_to_csv_converter:main"
