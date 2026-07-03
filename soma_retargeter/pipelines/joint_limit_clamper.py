@@ -1,8 +1,32 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+# Modified by the eden-soma-retargeter fork: @wp.kernel definitions hoisted to module scope.
 
 import warp as wp
 import numpy as np
+
+
+# Hoisted out of JointLimitClamper.apply(): defining a @wp.kernel inside a
+# method that runs once per retargeted frame leaks host memory (Warp retains
+# each redefinition in its module registry), which makes streaming/looped
+# retargeting grow RSS without bound. The kernel closes over nothing, so it is
+# safe at module scope.
+@wp.kernel
+def _clamp_to_joint_limits_kernel(
+    in_joint_limit_lower : wp.array1d(dtype=wp.float32),  # (n_dofs)
+    in_joint_limit_upper : wp.array1d(dtype=wp.float32),  # (n_dofs)
+    in_dof_to_coord      : wp.array1d(dtype=wp.int32),    # (n_dofs)
+    inout_joint_q        : wp.array2d(dtype=wp.float32)   # (n_batch, n_coords)
+):
+    env, dof_idx = wp.tid()
+    coord_idx = in_dof_to_coord[dof_idx]
+    if coord_idx < 0:
+        return
+
+    inout_joint_q[env, coord_idx] = wp.clamp(
+        inout_joint_q[env, coord_idx],
+        in_joint_limit_lower[dof_idx],
+        in_joint_limit_upper[dof_idx])
 
 
 class JointLimitClamper:
@@ -44,25 +68,8 @@ class JointLimitClamper:
         if joint_q.shape[1] != self.n_coords:
             raise ValueError(f"[ERROR]: joint_q size mismatch. Expected joint_q shape of [{joint_q.shape[0]}, {self.n_coords}] but received [{joint_q.shape}]")
 
-        @wp.kernel
-        def clamp_to_joint_limits_kernel(
-            in_joint_limit_lower : wp.array1d(dtype=wp.float32),  # (n_dofs)
-            in_joint_limit_upper : wp.array1d(dtype=wp.float32),  # (n_dofs)
-            in_dof_to_coord      : wp.array1d(dtype=wp.int32),    # (n_dofs)
-            inout_joint_q        : wp.array2d(dtype=wp.float32)   # (n_batch, n_coords)
-        ):
-            env, dof_idx = wp.tid()
-            coord_idx = in_dof_to_coord[dof_idx]
-            if coord_idx < 0:
-                return
-
-            inout_joint_q[env, coord_idx] = wp.clamp(
-                inout_joint_q[env, coord_idx],
-                in_joint_limit_lower[dof_idx],
-                in_joint_limit_upper[dof_idx])
-
         wp.launch(
-            clamp_to_joint_limits_kernel,
+            _clamp_to_joint_limits_kernel,
             dim=[joint_q.shape[0], self.n_dofs],
             inputs=[
                 self.joint_limit_lower,

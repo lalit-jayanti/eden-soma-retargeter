@@ -18,7 +18,7 @@ Thank you for understanding, and we hope this project serves as a valuable resou
 
 ## Developer Certificate of Origin (DCO)
 
-Although we do not accept contributions, our legal policy requires that any unsolicited code submissions (e.g., pull requests), it must comply with the [Developer Certificate of Origin (DCO)](https://developercertificate.org/).
+Although we do not accept contributions, any unsolicited code submissions (e.g., pull requests) must comply with the [Developer Certificate of Origin (DCO)](https://developercertificate.org/).
 
 * We require that all contributors "sign-off" on their commits. This certifies that the contribution is your original work, or you have rights to submit it under the same license, or a compatible license.
 

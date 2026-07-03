@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+# Modified by the eden-soma-retargeter fork: @wp.kernel definitions hoisted to module scope.
 
 import warp as wp
 
@@ -77,33 +78,11 @@ class HumanToRobotScaler:
         if skeleton_instance.skeleton != self.skeleton:
             raise ValueError("[ERROR]: SkeletonInstance.skeleton is not equal to self.skeleton.")
 
-        @wp.kernel
-        def compute_global_pose_kernel(
-            in_num_joints     : wp.int32,
-            in_root_tx        : wp.transform,
-            in_parent_indices : wp.array(dtype=wp.int32),
-            in_local_pose     : wp.array(dtype=wp.transform),
-            out_result        : wp.array(dtype=wp.transform)
-        ):
-            pose_utils.wp_compute_global_pose(in_num_joints, in_root_tx, in_parent_indices, in_local_pose, out_result)
-
-        @wp.kernel
-        def compute_scaled_effectors_kernel(
-            in_num_mapped_joints    : wp.int32,
-            in_global_pose          : wp.array(dtype=wp.transform),
-            in_mapped_joint_indices : wp.array(dtype=wp.int32),
-            in_mapped_joint_scales  : wp.array(dtype=wp.float32),
-            in_mapped_joint_offsets : wp.array(dtype=wp.transform),
-            in_scale_animation      : wp.bool,
-            out_result              : wp.array(dtype=wp.transform)
-        ):
-            HumanToRobotScaler.wp_compute_scaled_effectors(
-                in_num_mapped_joints, in_global_pose, in_mapped_joint_indices,
-                in_mapped_joint_scales, in_mapped_joint_offsets, in_scale_animation, out_result)
-
+        # Kernels are hoisted to module scope (see below the class) to avoid the
+        # per-call @wp.kernel-definition memory leak.
         wp_global_pose = wp.array([wp.transform_identity()] * skeleton_instance.num_joints, dtype=wp.transform)
         wp.launch(
-            compute_global_pose_kernel,
+            _compute_global_pose_kernel,
             dim=1,
             inputs=[
                 skeleton_instance.num_joints,
@@ -114,7 +93,7 @@ class HumanToRobotScaler:
 
         wp_effectors = wp.array([wp.transform_identity()] * len(self.mapped_joint_indices), dtype=wp.transform)
         wp.launch(
-            compute_scaled_effectors_kernel,
+            _compute_scaled_effectors_kernel,
             dim=1,
             inputs=[
                 len(self.mapped_joint_indices),
@@ -151,36 +130,12 @@ class HumanToRobotScaler:
         if animation_buffer.skeleton != self.skeleton:
             raise ValueError("[ERROR]: AnimationBuffer.skeleton is not equal to self.skeleton.")
 
-        @wp.kernel
-        def batched_compute_global_pose_kernel(
-            in_num_joints     : wp.int32,
-            in_root_tx        : wp.transform,
-            in_parent_indices : wp.array(dtype=wp.int32),
-            in_local_pose     : wp.array2d(dtype=wp.transform),
-            out_result        : wp.array2d(dtype=wp.transform)
-        ):
-            frame_idx = wp.tid()
-            pose_utils.wp_compute_global_pose(
-                in_num_joints, in_root_tx, in_parent_indices, in_local_pose[frame_idx], out_result[frame_idx])
-
-        @wp.kernel
-        def batched_compute_scaled_effectors_2d_kernel(
-            in_num_mapped_joints    : wp.int32,
-            in_global_pose          : wp.array2d(dtype=wp.transform),
-            in_mapped_joint_indices : wp.array(dtype=wp.int32),
-            in_mapped_joint_scales  : wp.array(dtype=wp.float32),
-            in_mapped_joint_offsets : wp.array(dtype=wp.transform),
-            in_scale_animation      : wp.bool,
-            out_result              : wp.array2d(dtype=wp.transform)
-        ):
-            frame_idx = wp.tid()
-            HumanToRobotScaler.wp_compute_scaled_effectors(
-               in_num_mapped_joints, in_global_pose[frame_idx], in_mapped_joint_indices,
-               in_mapped_joint_scales, in_mapped_joint_offsets, in_scale_animation, out_result[frame_idx])
-
+        # Kernels are hoisted to module scope (see below the class) because
+        # defining a @wp.kernel inside this per-clip method leaks host memory
+        # across a streamed batch of clips.
         wp_global_poses = wp.empty(shape=(animation_buffer.num_frames, self.skeleton.num_joints), dtype=wp.transform)
         wp.launch(
-            batched_compute_global_pose_kernel,
+            _batched_compute_global_pose_kernel,
             dim=animation_buffer.num_frames,
             inputs=[
                 self.skeleton.num_joints,
@@ -191,7 +146,7 @@ class HumanToRobotScaler:
 
         wp_effectors = wp.empty(shape=(animation_buffer.num_frames, len(self.mapped_joint_indices)), dtype=wp.transform)
         wp.launch(
-            batched_compute_scaled_effectors_2d_kernel,
+            _batched_compute_scaled_effectors_2d_kernel,
             dim=animation_buffer.num_frames,
             inputs=[
                 len(self.mapped_joint_indices),
@@ -267,3 +222,64 @@ class HumanToRobotScaler:
             q = wp.mul(pose_tx.q, offset_tx.q)
             t = geocentric_scaled_t + scaled_root_t + wp.quat_rotate(q, offset_tx.p)
             out_result[i] = wp.transform(t, q)
+
+
+# Hoisted out of HumanToRobotScaler methods: defining these @wp.kernel objects
+# inside per-call methods leaks host memory across a streamed batch of clips
+# (Warp retains each redefinition). They close over nothing but the module-level
+# pose_utils func and the class @wp.func, both resolvable here, so module scope
+# is safe. Placed after the class so HumanToRobotScaler.wp_compute_scaled_effectors
+# is defined.
+@wp.kernel
+def _compute_global_pose_kernel(
+    in_num_joints     : wp.int32,
+    in_root_tx        : wp.transform,
+    in_parent_indices : wp.array(dtype=wp.int32),
+    in_local_pose     : wp.array(dtype=wp.transform),
+    out_result        : wp.array(dtype=wp.transform)
+):
+    pose_utils.wp_compute_global_pose(in_num_joints, in_root_tx, in_parent_indices, in_local_pose, out_result)
+
+
+@wp.kernel
+def _compute_scaled_effectors_kernel(
+    in_num_mapped_joints    : wp.int32,
+    in_global_pose          : wp.array(dtype=wp.transform),
+    in_mapped_joint_indices : wp.array(dtype=wp.int32),
+    in_mapped_joint_scales  : wp.array(dtype=wp.float32),
+    in_mapped_joint_offsets : wp.array(dtype=wp.transform),
+    in_scale_animation      : wp.bool,
+    out_result              : wp.array(dtype=wp.transform)
+):
+    HumanToRobotScaler.wp_compute_scaled_effectors(
+        in_num_mapped_joints, in_global_pose, in_mapped_joint_indices,
+        in_mapped_joint_scales, in_mapped_joint_offsets, in_scale_animation, out_result)
+
+
+@wp.kernel
+def _batched_compute_global_pose_kernel(
+    in_num_joints     : wp.int32,
+    in_root_tx        : wp.transform,
+    in_parent_indices : wp.array(dtype=wp.int32),
+    in_local_pose     : wp.array2d(dtype=wp.transform),
+    out_result        : wp.array2d(dtype=wp.transform)
+):
+    frame_idx = wp.tid()
+    pose_utils.wp_compute_global_pose(
+        in_num_joints, in_root_tx, in_parent_indices, in_local_pose[frame_idx], out_result[frame_idx])
+
+
+@wp.kernel
+def _batched_compute_scaled_effectors_2d_kernel(
+    in_num_mapped_joints    : wp.int32,
+    in_global_pose          : wp.array2d(dtype=wp.transform),
+    in_mapped_joint_indices : wp.array(dtype=wp.int32),
+    in_mapped_joint_scales  : wp.array(dtype=wp.float32),
+    in_mapped_joint_offsets : wp.array(dtype=wp.transform),
+    in_scale_animation      : wp.bool,
+    out_result              : wp.array2d(dtype=wp.transform)
+):
+    frame_idx = wp.tid()
+    HumanToRobotScaler.wp_compute_scaled_effectors(
+        in_num_mapped_joints, in_global_pose[frame_idx], in_mapped_joint_indices,
+        in_mapped_joint_scales, in_mapped_joint_offsets, in_scale_animation, out_result[frame_idx])

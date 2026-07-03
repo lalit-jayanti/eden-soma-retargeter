@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+# Modified by the eden-soma-retargeter fork: @wp.kernel definitions hoisted to module scope.
 
 import warp as wp
 
@@ -12,6 +13,52 @@ _LIMB_DATA_IDX_NAME = 0
 _LIMB_DATA_IDX_EFFECTOR_INDICES = 1
 _LIMB_DATA_IDX_HINT_REF = 2
 _LIMB_DATA_IDX_HINT_OFFSET = 3
+
+
+# Hoisted out of FeetStabilizer.solve(): defining this @wp.kernel inside a method
+# that runs once per retargeted frame leaks host memory (Warp keeps every
+# redefinition in its module registry), which makes streaming/looped retargeting
+# grow RSS without bound. It closes over nothing, so it is safe at module scope.
+@wp.kernel
+def _solve_two_bone_ik_batched_kernel(
+    in_body_q               : wp.array2d(dtype=wp.transform),
+    in_pelvis_index         : wp.int32,
+    in_num_ik_chains        : wp.int32,
+    in_chain_indices        : wp.array2d(dtype=wp.int32),
+    in_chain_parent_indices : wp.array1d(dtype=wp.int32),
+    in_chain_hint_indices   : wp.array1d(dtype=wp.int32),
+    in_chain_hint_offsets   : wp.array1d(dtype=wp.vec3),
+    in_ik_targets           : wp.array2d(dtype=wp.transform),
+    out_result              : wp.array2d(dtype=wp.transform)
+):
+    env = wp.tid()
+    body_q = in_body_q[env]
+
+    out_result[env, 0] = body_q[in_pelvis_index]
+    offset = wp.int32(1)
+    for i in range(in_num_ik_chains):
+        chain_indices = in_chain_indices[i]
+        chain_hint_idx = in_chain_hint_indices[i]
+
+        use_hint = chain_hint_idx != -1
+        chain_hint_world = wp.vec3(0.0, 0.0, 0.0)
+        if use_hint:
+            chain_hint_world = wp.transform_point(body_q[chain_hint_idx], in_chain_hint_offsets[i])
+
+        result = ik_utils.wp_solve_two_bone_ik(
+            1.0,
+            body_q[in_chain_parent_indices[i]],
+            body_q[chain_indices[0]],
+            body_q[chain_indices[1]],
+            body_q[chain_indices[2]],
+            in_ik_targets[env, i],
+            use_hint,
+            chain_hint_world)
+
+        out_result[env, offset + 0] = result.root
+        out_result[env, offset + 1] = result.mid
+        out_result[env, offset + 2] = result.tip
+        offset += wp.int32(3)
 
 
 class FeetStabilizer:
@@ -107,49 +154,8 @@ class FeetStabilizer:
         if targets_tx.shape != (self.num_envs, self.two_bone_ik_chains.shape[0], 7):
             raise ValueError(f"[ERROR]: targets_tx size mismatch. Expected targets_tx shape is [{(self.num_envs, self.two_bone_ik_chains.shape[0], 7)}] but received [{targets_tx.shape}]")
 
-        @wp.kernel
-        def solve_two_bone_ik_batched_kernel(
-            in_body_q               : wp.array2d(dtype=wp.transform),
-            in_pelvis_index         : wp.int32,
-            in_num_ik_chains        : wp.int32,
-            in_chain_indices        : wp.array2d(dtype=wp.int32),
-            in_chain_parent_indices : wp.array1d(dtype=wp.int32),
-            in_chain_hint_indices   : wp.array1d(dtype=wp.int32),
-            in_chain_hint_offsets   : wp.array1d(dtype=wp.vec3),
-            in_ik_targets           : wp.array2d(dtype=wp.transform),
-            out_result              : wp.array2d(dtype=wp.transform)
-        ):
-            env = wp.tid()
-            body_q = in_body_q[env]
-
-            out_result[env, 0] = body_q[in_pelvis_index]
-            offset = wp.int32(1)
-            for i in range(in_num_ik_chains):
-                chain_indices = in_chain_indices[i]
-                chain_hint_idx = in_chain_hint_indices[i]
-
-                use_hint = chain_hint_idx != -1
-                chain_hint_world = wp.vec3(0.0, 0.0, 0.0)
-                if use_hint:
-                    chain_hint_world = wp.transform_point(body_q[chain_hint_idx], in_chain_hint_offsets[i])
-
-                result = ik_utils.wp_solve_two_bone_ik(
-                    1.0,
-                    body_q[in_chain_parent_indices[i]],
-                    body_q[chain_indices[0]],
-                    body_q[chain_indices[1]],
-                    body_q[chain_indices[2]],
-                    in_ik_targets[env, i],
-                    use_hint,
-                    chain_hint_world)
-
-                out_result[env, offset + 0] = result.root
-                out_result[env, offset + 1] = result.mid
-                out_result[env, offset + 2] = result.tip
-                offset += wp.int32(3)
-
         wp.launch(
-            solve_two_bone_ik_batched_kernel,
+            _solve_two_bone_ik_batched_kernel,
             dim=self.num_envs,
             inputs=[
                 self.state.body_q.reshape(shape=[self.num_envs, self.num_body_count]),

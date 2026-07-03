@@ -1,15 +1,14 @@
-> **Note:** This is an unofficial fork of [https://github.com/NVIDIA/soma-retargeter](https://github.com/NVIDIA/soma-retargeter).
+# eden-soma-retargeter
 
-# SOMA Retargeter
+> **Note:** This is an unofficial fork of [NVIDIA/soma-retargeter](https://github.com/NVIDIA/soma-retargeter). It is not affiliated with or endorsed by NVIDIA.
+
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 ![SOMA Retargeter Banner](assets/docs/banner.gif)
 
 Convert [SOMA](https://github.com/NVlabs/SOMA-X) human motion captures into humanoid robot joint animation. Takes BVH motion files as input and produces robot-playable CSV joint data as output using GPU-optimized inverse kinematics via [Newton](https://github.com/newton-physics/newton) and high-performance computation with [NVIDIA Warp](https://github.com/NVIDIA/warp).
 
-The retargeting pipeline handles proportional human-to-robot scaling, multi-objective IK solving with joint limits, feet stabilization to maintain ground contact, and per-DOF joint limit clamping. Currently supports SOMA as the input skeleton and Unitree G1 (29 DOF) as the output robot. Additional robot targets are planned.
-
-SOMA Retargeter is part of the [SOMA body model](https://github.com/NVlabs/SOMA-X) ecosystem for humanoid motion data.
+The retargeting pipeline handles proportional human-to-robot scaling, multi-objective IK solving with joint limits, feet stabilization to maintain ground contact, and per-DOF joint limit clamping. Currently supports SOMA as the input skeleton and Unitree G1 (29 DOF) as the output robot.
 
 > **Note:** This project is in active development. The API may change between releases as the design is refined.
 
@@ -41,44 +40,23 @@ LFS only needs to be pulled if you plan to use the sample motions in `assets/mot
 
 ### Method 1 (conda + pip)
 
-#### 1. Create and Activate Conda Environment
-
 ```bash
 conda create -n soma-retargeter python=3.12 -y
 conda activate soma-retargeter
-```
-
-#### 2. Download LFS Assets
-
-```bash
-git lfs pull
-```
-
-#### 3. Install the Library
-
-```bash
+git lfs pull   # sample motions / docs assets
 pip install .
 ```
 
 ### Method 2 (uv)
 
-#### 1. Install uv
-
-Follow the [official installation guide](https://docs.astral.sh/uv/getting-started/installation/) if `uv` is not yet installed.
-
-#### 2. Download LFS Assets
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then:
 
 ```bash
 git lfs pull
-```
-
-#### 3. Sync the Project
-
-`uv sync` creates an isolated `.venv` virtual environment inside the project directory, installs the correct Python version and resolves all dependencies.
-
-```bash
 uv sync
 ```
+
+`uv sync` creates an isolated `.venv` inside the project directory, installs the correct Python version and resolves all dependencies.
 
 ### Platform-specific notes
 
@@ -96,7 +74,7 @@ sudo apt-get install python3.12-tk
 
 This repo includes 10 sample BVH/CSV pairs in `assets/motions/` for immediate testing.
 
-For large-scale motion data, see the [SEED dataset](https://huggingface.co/datasets/bones-studio/seed) (Skeletal Everyday Embodiment Dataset) published by [Bones Studio](https://huggingface.co/bones-studio). SEED provides a large-scale collection of human motions on the SOMA uniform-proportion skeleton, which is the expected input format for this tool. The G1 robot motion data included in SEED was retargeted using SOMA Retargeter.
+For large-scale motion data, see the [SEED dataset](https://huggingface.co/datasets/bones-studio/seed) (Skeletal Everyday Embodiment Dataset) published by [Bones Studio](https://huggingface.co/bones-studio). SEED provides a large-scale collection of human motions on the SOMA uniform-proportion skeleton, which is the expected input format for this tool. The G1 robot motion data included in SEED was retargeted using the upstream SOMA Retargeter.
 
 ## Quick Start
 
@@ -134,6 +112,40 @@ The same entry point is also reachable as a Python module, useful for embedding 
 python -m soma_retargeter.app.bvh_to_csv_converter --viewer null
 ```
 
+### In-process Python API (`soma_retargeter.retargeting`)
+
+For embedding retargeting directly in a Python program — with no temp files or
+subprocesses, and flat memory across an unbounded stream of clips — use
+`MotionRetargeter`. It also fits **SMPL / SMPL-H / SMPL-X** motion into the SOMA
+rig on the way in (via [py-soma-x](https://github.com/NVlabs/SOMA-X)), so you can
+retarget raw AMASS-style body-model motion, not just SOMA BVH.
+
+```python
+from soma_retargeter.retargeting import MotionRetargeter
+
+# SMPL-X -> Unitree G1 (fitting requires the [fit] extra)
+rt = MotionRetargeter(body_model="smplx", body_model_path="/path/to/SMPLX_NEUTRAL.npz",
+                      target_fps=30.0, device="cuda")
+out = rt.retarget(poses, trans, source_fps=120.0, betas=betas)   # AMASS layout arrays
+# out = {"root_pos" (T,3) m, "root_quat" (T,4) wxyz, "dof_pos" (T,29) rad,
+#        "joint_names" [29], "fps"}
+
+# Native SOMA motion needs no body model and no torch:
+rt_soma = MotionRetargeter(body_model="soma", target_fps=30.0)
+out = rt_soma.retarget_bvh("motion.bvh")                 # SOMA-skeleton BVH (e.g. BONES-SEED)
+out = rt_soma.retarget_soma_npz("motion.npz", source_fps=30.0)   # save_soma_npz format
+```
+
+Install the fit dependencies with the extra:
+
+```bash
+pip install "eden-soma-retargeter[fit]"
+```
+
+`retarget_batch([...])` retargets many clips in one IK solve (one env per clip).
+See the `MotionRetargeter` docstring for the full option set (per-call gender,
+chunk sizes, IK overrides, …).
+
 ## Code Overview
 
 ### `soma_retargeter/`
@@ -144,14 +156,15 @@ python -m soma_retargeter.app.bvh_to_csv_converter --viewer null
 | `animation/` | Core data structures for skeletons, animation buffers, IK, and skinned meshes. |
 | `assets/` | File I/O for BVH, CSV, and USD formats. |
 | `pipelines/` | Retargeting pipeline: IK solving, feet stabilization, and joint limit clamping. |
+| `retargeting/` | Fork-added in-process Python API (`MotionRetargeter`): SMPL-family fitting + native SOMA input. |
 | `robotics/` | Human-to-robot scaling and robot output formatting. |
 | `renderers/` | Visualization for the interactive viewer. |
 | `utils/` | Math, pose, coordinate conversion, Newton and Warp helpers. |
 | `configs/` | JSON configuration for retargeting, scaling, and feet stabilization parameters, plus the default `default_bvh_to_csv_converter_config.json` shipped with the wheel. |
 
-## Related Work
+## Related Work & Acknowledgments
 
-SOMA Retargeter is a support tool within the SOMA ecosystem for humanoid motion data:
+Upstream SOMA-ecosystem projects for humanoid motion data:
 
 * [SOMA Body Model](https://github.com/NVlabs/SOMA-X) - Parametric human body model with standardized skeleton, mesh, and shape parameters
 * [GEM-X](https://github.com/NVlabs/GEM-X) - Human motion estimation from video
@@ -159,14 +172,8 @@ SOMA Retargeter is a support tool within the SOMA ecosystem for humanoid motion 
 * [ProtoMotions](https://github.com/NVlabs/ProtoMotions) - GPU-accelerated simulation and learning framework for training physically simulated digital humans and humanoid robots
 * [SONIC](https://nvlabs.github.io/GEAR-SONIC/) - Whole-body control for humanoid robots, training locomotion and interaction policies
 
-## Acknowledgments
-
-This project draws inspiration and builds upon excellent open-source work, including:
-* [GMR](https://github.com/YanjieZe/GMR) - General Motion Retargeting
-* [PyRoki](https://pyroki-toolkit.github.io/) - A Modular Toolkit for Robot Kinematic Optimization
+The upstream project also draws on [GMR](https://github.com/YanjieZe/GMR) (General Motion Retargeting) and [PyRoki](https://pyroki-toolkit.github.io/) (A Modular Toolkit for Robot Kinematic Optimization).
 
 ## License
 
-This codebase is licensed under [Apache-2.0](LICENSE).
-
-This project will download and install additional third-party open source software projects. Review the license terms of these open source projects before use.
+Licensed under [Apache-2.0](LICENSE), same as the upstream project. Installation pulls in third-party open-source dependencies; review their license terms before use.

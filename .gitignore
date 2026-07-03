@@ -11,6 +11,10 @@ wheels/
 
 # IDE
 .vscode/settings.json
+.claude/
+
+# Scratch / working notes
+scratch/
 
 # Log files, settings
 imgui.ini

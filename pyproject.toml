@@ -23,6 +23,16 @@ dependencies = [
 ]
 readme = "README.md"
 
+[project.optional-dependencies]
+# In-process SMPL/SMPL-H/SMPL-X -> SOMA fitting (soma_retargeter.retargeting).
+# The core BVH -> CSV path and the soma-bvh-to-csv script work without these.
+fit = [
+    "py-soma-x>=0.1.0,<0.3",
+    "smplx==0.1.28",
+    "torch>=2.4",
+    "chumpy>=0.70",
+]
+
 [project.scripts]
 soma-bvh-to-csv = "soma_retargeter.app.bvh_to_csv_converter:main"
 
