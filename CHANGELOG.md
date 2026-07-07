@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.3.0]
+
+### Added
+- Multi-robot retargeting targets. A robot is defined by a
+  `configs/<robot>/soma_to_<robot>_retargeter_config.json` bundle; the new
+  `robot_model` config section declares how its Newton model is loaded
+  (`type: mjcf|urdf`, optional `newton_asset`/`relpath` for download-backed
+  models, `floating` for URDF bases). `available_target_robots()` lists the
+  bundled robots.
+- `limx_oli` target (LimX Oli / HU_D04, 31-DoF humanoid): full config bundle
+  (retargeter, scaler, feet stabilizer) mapping the SOMA rig onto the Oli URDF.
+  The URDF itself is not bundled — pass it via the new
+  `MotionRetargeter(robot_model_path=...)` kwarg (also threaded through
+  `NewtonPipeline` / `FeetStabilizer`).
+- `soma_retargeter.pipelines.robot_model` — shared robot-model loading
+  (spec validation, path resolution, mjcf/urdf dispatch) and model-derived
+  DOF naming, used by the pipeline, the feet stabilizer, and the CLI app.
+
+### Changed
+- Output `joint_names` are now derived from the loaded robot model's joint
+  labels (`joint_q` order) instead of a hand-authored list; for `unitree_g1`
+  the derived names are asserted equal to the legacy
+  `unitree_g1_joint_names()` order, and outputs are unchanged (verified
+  bit-identical). `MotionRetargeter.joint_names` is now a lazy property
+  (first access builds the IK pipeline).
+- The `TargetType` enum is gone; target robots are validated strings.
+  `get_target_type_from_str` / `get_target_str_from_type` keep working with
+  string semantics and now list the available robots on error.
+- G1's retargeter config renamed to the filename convention:
+  `soma_to_unitree_g1_retargeter_config.json` (content-identical apart from
+  the new `robot_model` section).
+- Config errors fail fast with actionable messages: unknown robots list the
+  available ones, bad `ik_map` / feet-effector / smoothing-mask body names
+  list the model's bodies, and robots without a bundled model name the
+  `robot_model_path=` kwarg at construction time.
+- `MotionRetargeter.__init__` gained `robot_model_path` (after `robot`);
+  callers passing the chunk options positionally must update.
+
 ## [0.2.0]
 
 ### Added

@@ -1,10 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-# Modified by the eden-soma-retargeter fork: @wp.kernel definitions hoisted to module scope.
+# Modified by the eden-soma-retargeter fork: @wp.kernel definitions hoisted to module scope;
+# robot model loading is config-driven via pipelines.robot_model (hardcoded unitree_g1 branch gone).
 
 import warp as wp
 
 import newton
+import soma_retargeter.pipelines.robot_model as robot_model
 import soma_retargeter.utils.newton_utils as newton_utils
 import soma_retargeter.animation.ik as ik_utils
 import soma_retargeter.utils.io_utils as io_utils
@@ -65,38 +67,44 @@ class FeetStabilizer:
     """
     FeetStabilizer class for managing inverse kinematics and feet stabilization for robotic motion transfer.
     """
-    def __init__(self, config: str):
+    def __init__(self, config: str, robot_model_spec: dict = None, robot_model_path=None):
         """
         Initialize the feet stabilizer with the specified configuration.
         Args:
             config (str): Path to the configuration file.
+            robot_model_spec (dict, optional): The ``robot_model`` section describing
+                how to load the robot (see ``soma_retargeter.pipelines.robot_model``).
+                If None, the spec is read from the robot's bundled retargeter config
+                (keyed by the ``robot_type`` in `config`).
+            robot_model_path: Optional robot model file overriding the spec's source;
+                required when the spec bundles no downloadable ``newton_asset``.
         Raises:
             ValueError: If the robot type specified in the config is unknown.
         """
         self._load_config(config)
 
-        if self.robot_type == 'unitree_g1':
-            self.robot_builder = newton.ModelBuilder()
-            self.robot_builder.add_mjcf(
-                newton.utils.download_asset("unitree_g1") / "mjcf/g1_29dof_rev_1_0.xml")
+        if robot_model_spec is None:
+            robot_model_spec = robot_model.default_robot_model_spec(self.robot_type)
+        self.robot_builder = newton.ModelBuilder()
+        robot_model.load_robot_model(self.robot_builder, robot_model_spec, robot_model_path, self.robot_type)
 
-            self.num_body_count = self.robot_builder.body_count
-            self.ik_model = self._build_model(1)
+        self.num_body_count = self.robot_builder.body_count
+        self.ik_model = self._build_model(1)
 
-            body_names = [newton_utils.get_name_from_label(label) for label in self.robot_builder.body_label]
-            self.effector_mapped_indices = [body_names.index(body_name) for (body_name, _) in self.effectors.items()]
-            self.effector_weights = [wp.vec2(*tr_weights) for (_, tr_weights) in self.effectors.items()]
-            effector_parent_indices = [self.robot_builder.joint_parent[idx] for idx in self.effector_mapped_indices]
+        body_names = [newton_utils.get_name_from_label(label) for label in self.robot_builder.body_label]
+        self.effector_mapped_indices = [
+            robot_model.find_body_index(body_names, body_name, f"feet stabilizer effector {body_name!r}", self.robot_type)
+            for (body_name, _) in self.effectors.items()]
+        self.effector_weights = [wp.vec2(*tr_weights) for (_, tr_weights) in self.effectors.items()]
+        effector_parent_indices = [self.robot_builder.joint_parent[idx] for idx in self.effector_mapped_indices]
 
-            self.pelvis_idx = self.effector_mapped_indices[self.ik_root]
-            self.two_bone_ik_chains = wp.array2d([[self.effector_mapped_indices[i] for i in limb[_LIMB_DATA_IDX_EFFECTOR_INDICES]] for limb in self.ik_limb_data], dtype=wp.int32)
-            self.two_bone_ik_chain_parent = wp.array([effector_parent_indices[limb[_LIMB_DATA_IDX_EFFECTOR_INDICES][0]] for limb in self.ik_limb_data], dtype=wp.int32)
-            self.two_bone_ik_hint_references = wp.array([self.effector_mapped_indices[limb[_LIMB_DATA_IDX_HINT_REF]] for limb in self.ik_limb_data], dtype=wp.int32)
-            self.two_bone_ik_hint_offsets = wp.array([limb[_LIMB_DATA_IDX_HINT_OFFSET] for limb in self.ik_limb_data], dtype=wp.vec3)
+        self.pelvis_idx = self.effector_mapped_indices[self.ik_root]
+        self.two_bone_ik_chains = wp.array2d([[self.effector_mapped_indices[i] for i in limb[_LIMB_DATA_IDX_EFFECTOR_INDICES]] for limb in self.ik_limb_data], dtype=wp.int32)
+        self.two_bone_ik_chain_parent = wp.array([effector_parent_indices[limb[_LIMB_DATA_IDX_EFFECTOR_INDICES][0]] for limb in self.ik_limb_data], dtype=wp.int32)
+        self.two_bone_ik_hint_references = wp.array([self.effector_mapped_indices[limb[_LIMB_DATA_IDX_HINT_REF]] for limb in self.ik_limb_data], dtype=wp.int32)
+        self.two_bone_ik_hint_offsets = wp.array([limb[_LIMB_DATA_IDX_HINT_OFFSET] for limb in self.ik_limb_data], dtype=wp.vec3)
 
-            self.num_envs = -1
-        else:
-            raise ValueError(f"[ERROR]: Unknown robot type {self.robot_type}")
+        self.num_envs = -1
 
     def setup_num_envs(self, num_envs):
         """

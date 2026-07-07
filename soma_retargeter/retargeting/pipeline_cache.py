@@ -49,10 +49,10 @@ class CachedNewtonPipeline(NewtonPipeline):
     """
 
     def __init__(self, skeleton, source_type="soma", robot_type="unitree_g1",
-                 retarget_config: dict = None, max_cached_env_counts: int = 2,
-                 verbose: bool = False):
+                 retarget_config: dict = None, robot_model_path=None,
+                 max_cached_env_counts: int = 2, verbose: bool = False):
         super().__init__(skeleton, source_type=source_type, robot_type=robot_type,
-                         retarget_config=retarget_config)
+                         retarget_config=retarget_config, robot_model_path=robot_model_path)
         self.verbose = verbose
         self._max_cached_env_counts = max(1, max_cached_env_counts)
         self._env_resources: OrderedDict[int, _EnvResources] = OrderedDict()

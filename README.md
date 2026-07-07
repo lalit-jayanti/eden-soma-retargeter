@@ -8,7 +8,7 @@
 
 Convert [SOMA](https://github.com/NVlabs/SOMA-X) human motion captures into humanoid robot joint animation. Takes BVH motion files as input and produces robot-playable CSV joint data as output using GPU-optimized inverse kinematics via [Newton](https://github.com/newton-physics/newton) and high-performance computation with [NVIDIA Warp](https://github.com/NVIDIA/warp).
 
-The retargeting pipeline handles proportional human-to-robot scaling, multi-objective IK solving with joint limits, feet stabilization to maintain ground contact, and per-DOF joint limit clamping. Currently supports SOMA as the input skeleton and Unitree G1 (29 DOF) as the output robot.
+The retargeting pipeline handles proportional human-to-robot scaling, multi-objective IK solving with joint limits, feet stabilization to maintain ground contact, and per-DOF joint limit clamping. Currently supports SOMA as the input skeleton, with Unitree G1 (29 DOF) and LimX Oli (HU_D04, 31 DOF) as output robots. Robots are defined by a `soma_retargeter/configs/<robot>/` config bundle — adding one requires no dispatch-code changes (see the `robot_model` config section and `soma_retargeter.pipelines.robot_model`).
 
 > **Note:** This project is in active development. The API may change between releases as the design is refined.
 
@@ -134,6 +134,12 @@ out = rt.retarget(poses, trans, source_fps=120.0, betas=betas)   # AMASS layout 
 rt_soma = MotionRetargeter(body_model="soma", target_fps=30.0)
 out = rt_soma.retarget_bvh("motion.bvh")                 # SOMA-skeleton BVH (e.g. BONES-SEED)
 out = rt_soma.retarget_soma_npz("motion.npz", source_fps=30.0)   # save_soma_npz format
+
+# SOMA -> LimX Oli (31 DOF). The Oli URDF is not bundled: pass your own copy
+# (e.g. HU_D04_01.urdf from the robot's asset distribution).
+rt_oli = MotionRetargeter(body_model="soma", robot="limx_oli",
+                          robot_model_path="/path/to/HU_D04_01.urdf")
+out = rt_oli.retarget_bvh("motion.bvh")                  # dof_pos (T, 31)
 ```
 
 Install the fit dependencies with the extra:

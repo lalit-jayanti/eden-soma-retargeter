@@ -1,5 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+# Modified by the eden-soma-retargeter fork: robot model loading and joint naming are config-driven
+# via pipelines.robot_model (the hardcoded unitree_g1 branch is gone).
 
 import warp as wp
 import numpy as np
@@ -10,6 +12,7 @@ from tqdm import trange
 import soma_retargeter.assets.bvh as bvh_utils
 import soma_retargeter.utils.newton_utils as newton_utils
 import soma_retargeter.utils.io_utils as io_utils
+import soma_retargeter.pipelines.robot_model as robot_model
 import soma_retargeter.pipelines.utils as pipeline_utils
 from soma_retargeter.pipelines.ik_objectives import IKSmoothJointFilter
 from soma_retargeter.animation.skeleton import Skeleton, SkeletonInstance
@@ -31,21 +34,27 @@ class NewtonPipeline:
     Newton-based motion retargeting pipeline.
 
     This pipeline retargets human motion captured on a common skeleton
-    to a target robot (currently Unitree G1) using inverse kinematics (IK),
-    custom objectives, and optional post-processing filters such as
-    joint limit clamping and feet stabilization.
+    to a target robot using inverse kinematics (IK), custom objectives, and
+    optional post-processing filters such as joint limit clamping and feet
+    stabilization. Robots are defined by ``configs/<robot>/`` config bundles
+    (see ``soma_retargeter.pipelines.robot_model``).
     """
-    def __init__(self, skeleton: Skeleton, source_type='soma', robot_type='unitree_g1', retarget_config: dict = None):
+    def __init__(self, skeleton: Skeleton, source_type='soma', robot_type='unitree_g1',
+                 retarget_config: dict = None, robot_model_path=None):
         """
         Initialize the Newton retargeting pipeline.
 
         Args:
             skeleton: Common skeleton definition used by the input clips to be retargeted.
             source_type: Source skeleton type name. Currently only "soma" is supported.
-            robot_type: Target robot type name. Currently only "unitree_g1" is supported.
+            robot_type: Target robot name; any robot with a bundled
+                ``configs/<robot>/soma_to_<robot>_retargeter_config.json``.
             retarget_config: Optional configuration dictionary. If None, a
                 configuration is loaded from disk based on the source/target
                 types.
+            robot_model_path: Optional robot model file (MJCF/URDF) overriding
+                the config's ``robot_model`` source. Required for robots whose
+                config bundles no downloadable ``newton_asset``.
 
         Raises:
             ValueError: If the target robot type is not supported.
@@ -69,53 +78,81 @@ class NewtonPipeline:
         self.smooth_joint_filter_coord_masks = None
         self.joint_limit_clamper = None
 
-        if (self.target_type == pipeline_utils.TargetType.UNITREE_G1):
-            self.robot_builder = newton.ModelBuilder()
-            self.robot_builder.add_mjcf(
-                newton.utils.download_asset("unitree_g1") / "mjcf/g1_29dof_rev_1_0.xml")
+        model_spec = retargeter_config.get('robot_model')
+        if model_spec is None:
+            model_spec = robot_model.default_robot_model_spec(self.target_type)
+        model_path = robot_model.resolve_robot_model_path(model_spec, robot_model_path, self.target_type)
 
-            self.human_robot_scaler = HumanToRobotScaler(
-                skeleton, retargeter_config['model_height'], io_utils.get_config_file(retargeter_config['human_robot_scaler_config']))
+        self.robot_builder = newton.ModelBuilder()
+        robot_model.load_robot_model(self.robot_builder, model_spec, model_path, self.target_type)
+        self.joint_names = robot_model.derive_joint_names(self.robot_builder, self.target_type)
+        if self.target_type == "unitree_g1":
+            self._check_g1_joint_names()
 
-            self.num_body_count = self.robot_builder.body_count
-            self.num_dofs = self.robot_builder.joint_dof_count
-            self.ik_model = self._build_model(1)
+        self.human_robot_scaler = HumanToRobotScaler(
+            skeleton, retargeter_config['model_height'], io_utils.get_config_file(retargeter_config['human_robot_scaler_config']))
 
-            (
-                self.mapped_joints,
-                self.mapped_joint_indices,
-                self.mapped_body_link_pos_data,
-                self.mapped_body_link_rot_data
-            ) = self._build_target_mapping(
-                self.ik_model,
-                self.human_robot_scaler.skeleton,
-                retargeter_config)
+        self.num_body_count = self.robot_builder.body_count
+        self.num_dofs = self.robot_builder.joint_dof_count
+        self.ik_model = self._build_model(1)
 
-            smooth_joint_filter_objective_body_masks = retargeter_config.get('smooth_joint_filter_objective_body_masks', None)
-            if smooth_joint_filter_objective_body_masks is not None:
-                self.smooth_joint_filter_coord_masks = newton_utils.create_joint_coord_masks(
-                    self.ik_model, smooth_joint_filter_objective_body_masks, 0.0)
+        (
+            self.mapped_joints,
+            self.mapped_joint_indices,
+            self.mapped_body_link_pos_data,
+            self.mapped_body_link_rot_data
+        ) = self._build_target_mapping(
+            self.ik_model,
+            self.human_robot_scaler.skeleton,
+            retargeter_config)
 
-            effector_names = self.human_robot_scaler.effector_names()
-            self.target_effector_indices = [effector_names.index(name) for name in self.mapped_joints]
-            self.feet_effector_indices = [
-                self.mapped_joints.index("LeftFoot"),
-                self.mapped_joints.index("RightFoot")]
+        smooth_joint_filter_objective_body_masks = retargeter_config.get('smooth_joint_filter_objective_body_masks', None)
+        if smooth_joint_filter_objective_body_masks is not None:
+            self.smooth_joint_filter_coord_masks = newton_utils.create_joint_coord_masks(
+                self.ik_model, smooth_joint_filter_objective_body_masks, 0.0)
 
-            self.feet_stabilizer = FeetStabilizer(io_utils.get_config_file(retargeter_config['feet_stabilizer_config']))
-            self.joint_limit_clamper = JointLimitClamper(self.ik_model)
+        effector_names = self.human_robot_scaler.effector_names()
+        for joint in self.mapped_joints:
+            if joint not in effector_names:
+                raise ValueError(
+                    f"robot {robot_type!r}: ik_map joint {joint!r} is not an effector of the scaler config "
+                    f"({retargeter_config['human_robot_scaler_config']}); its 'joint_scales' keys resolve to "
+                    f"effectors {effector_names}")
+        self.target_effector_indices = [effector_names.index(name) for name in self.mapped_joints]
+        for foot in ("LeftFoot", "RightFoot"):
+            if foot not in self.mapped_joints:
+                raise ValueError(
+                    f"robot {robot_type!r}: ik_map must contain a {foot!r} entry (required for feet "
+                    "stabilization)")
+        self.feet_effector_indices = [
+            self.mapped_joints.index("LeftFoot"),
+            self.mapped_joints.index("RightFoot")]
 
-            self.initialization_pose = None
-            self.num_initialization_frames = 0
-            self.num_stabilization_frames = 0
-            if (retargeter_config['initialization_pose']):
-                init_skel, init_anim = bvh_utils.load_bvh(io_utils.get_config_file(retargeter_config['initialization_pose']))
-                self.initialization_pose = SkeletonInstance(init_skel, [0, 0, 0], wp.transform_identity())
-                self.initialization_pose.set_local_transforms(init_anim.get_local_transforms(0))
-                self.num_initialization_frames = retargeter_config.get('num_initialization_frames', _DEFAULT_NUM_INITIALIZATION_FRAMES)
-                self.num_stabilization_frames = retargeter_config.get('num_stabilization_frames', _DEFAULT_NUM_STABILIZATION_FRAMES)
-        else:
-            raise ValueError("Unsupported robot type.")
+        self.feet_stabilizer = FeetStabilizer(
+            io_utils.get_config_file(retargeter_config['feet_stabilizer_config']),
+            robot_model_spec=model_spec, robot_model_path=model_path)
+        self.joint_limit_clamper = JointLimitClamper(self.ik_model)
+
+        self.initialization_pose = None
+        self.num_initialization_frames = 0
+        self.num_stabilization_frames = 0
+        if (retargeter_config['initialization_pose']):
+            init_skel, init_anim = bvh_utils.load_bvh(io_utils.get_config_file(retargeter_config['initialization_pose']))
+            self.initialization_pose = SkeletonInstance(init_skel, [0, 0, 0], wp.transform_identity())
+            self.initialization_pose.set_local_transforms(init_anim.get_local_transforms(0))
+            self.num_initialization_frames = retargeter_config.get('num_initialization_frames', _DEFAULT_NUM_INITIALIZATION_FRAMES)
+            self.num_stabilization_frames = retargeter_config.get('num_stabilization_frames', _DEFAULT_NUM_STABILIZATION_FRAMES)
+
+    def _check_g1_joint_names(self):
+        # The G1 names were hand-authored (UnitreeG129DOF_CSVConfig) before they became
+        # model-derived; the legacy list pins the derived order against silent drift.
+        from soma_retargeter.retargeting.animation_io import unitree_g1_joint_names
+
+        legacy = unitree_g1_joint_names()
+        if self.joint_names != legacy:
+            raise RuntimeError(
+                "model-derived unitree_g1 joint names diverge from the legacy unitree_g1_joint_names() "
+                f"order:\nderived={self.joint_names}\nlegacy={legacy}")
 
     def clear(self):
         """
@@ -296,11 +333,21 @@ class NewtonPipeline:
         mapped_body_link_pos_data = []
         mapped_body_link_rot_data = []
         body_names = [newton_utils.get_name_from_label(label) for label in self.robot_builder.body_label]
+        robot = pipeline_utils.get_target_str_from_type(self.target_type)
         for joint, mapping_data in retargeter_config["ik_map"].items():
+            joint_index = skeleton.joint_index(joint)
+            if joint_index == -1:
+                raise ValueError(
+                    f"robot {robot!r}: ik_map key {joint!r} is not a joint of the source skeleton. "
+                    f"Available joints: {', '.join(skeleton.joint_names)}")
             mapped_joints.append(joint)
-            mapped_joint_indices.append(skeleton.joint_index(joint))
-            mapped_body_link_pos_data.append((body_names.index(mapping_data['t_body']), mapping_data['t_weight']))
-            mapped_body_link_rot_data.append((body_names.index(mapping_data['r_body']), mapping_data['r_weight']))
+            mapped_joint_indices.append(joint_index)
+            mapped_body_link_pos_data.append((
+                robot_model.find_body_index(body_names, mapping_data['t_body'], f"ik_map[{joint!r}].t_body", robot),
+                mapping_data['t_weight']))
+            mapped_body_link_rot_data.append((
+                robot_model.find_body_index(body_names, mapping_data['r_body'], f"ik_map[{joint!r}].r_body", robot),
+                mapping_data['r_weight']))
 
         return (
             mapped_joints,

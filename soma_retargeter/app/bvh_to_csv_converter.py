@@ -64,9 +64,10 @@ class Viewer:
         self.viewer.renderer.set_title("BVH to CSV Converter")
         self.viewer.register_ui_callback(lambda ui: self.gui(ui), position="free")
 
+        from soma_retargeter.pipelines.robot_model import default_robot_model_spec, load_robot_model
+
         g1_builder = newton.ModelBuilder()
-        g1_builder.add_mjcf(
-            newton.utils.download_asset("unitree_g1") / "mjcf/g1_29dof_rev_1_0.xml")
+        load_robot_model(g1_builder, default_robot_model_spec("unitree_g1"), robot_type="unitree_g1")
         
         self.num_robots = 1
         self.robot_offsets = [wp.transform(wp.vec3(0.0, i - (self.num_robots - 1) / 2.0, 0.0), wp.quat_identity()) for i in range(self.num_robots)]

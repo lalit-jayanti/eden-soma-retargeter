@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+# Modified by the eden-soma-retargeter fork: actionable error for unknown mask body names.
 
 import warp as wp
 import numpy as np
@@ -53,6 +54,10 @@ def create_joint_coord_masks(model, active_body_masks, default_mask_fill_value):
     joint_dof_dim_np = model.joint_dof_dim.numpy()
     body_name_to_idx = {get_name_from_label(k): i for i, k in enumerate(model.body_label)}
     for (key, value) in active_body_masks.items():
+        if key not in body_name_to_idx:
+            raise ValueError(
+                f"smooth_joint_filter_objective_body_masks refers to body {key!r}, which is not a body of "
+                f"the loaded model. Available bodies: {', '.join(body_name_to_idx)}")
         idx = body_name_to_idx[key]
         start_idx = joint_q_start_np[idx]
         dim = joint_dof_dim_np[idx][1]

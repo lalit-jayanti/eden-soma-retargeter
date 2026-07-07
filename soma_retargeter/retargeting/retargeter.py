@@ -22,7 +22,6 @@ from soma_retargeter.retargeting.animation_io import (
     mujoco_root_offset,
     resample_buffer,
     resample_rotvec_tracks,
-    unitree_g1_joint_names,
     zup_to_yup,
 )
 from soma_retargeter.retargeting.soma_format import (
@@ -50,7 +49,14 @@ class MotionRetargeter:
             stacks are built lazily and cached per gender.
         target_fps: Every clip is resampled to this rate before retargeting.
         device: Torch/warp device for the fit stage ("cuda", "cuda:1", "cpu").
-        robot: Target robot ("unitree_g1" is the only supported value).
+        robot: Target robot; any robot with a bundled
+            ``configs/<robot>/soma_to_<robot>_retargeter_config.json``
+            (e.g. "unitree_g1", "limx_oli"). See
+            ``soma_retargeter.pipelines.utils.available_target_robots()``.
+        robot_model_path: Robot model file (MJCF/URDF) overriding the config's
+            ``robot_model`` source. Required for robots whose config bundles no
+            downloadable ``newton_asset`` (e.g. "limx_oli", whose
+            ``HU_D04_01.urdf`` ships with the robot's asset distribution).
         forward_chunk: Body-model forward batch size (bounds peak VRAM).
         fit_chunk: PoseInversion fit batch size.
         pad_fit_chunks: Pad the tail chunk to ``fit_chunk`` frames (repeating
@@ -66,7 +72,7 @@ class MotionRetargeter:
             are truncated / zero-padded to this width.
         flat_hand_mean: Passed to ``smplx.create``.
         ik_config_overrides: dict merged over the bundled
-            ``soma_to_g1_retargeter_config.json`` (top-level keys replaced).
+            ``soma_to_<robot>_retargeter_config.json`` (top-level keys replaced).
         fit_kwargs: Forwarded to ``PoseInversion.fit`` (e.g. ``body_iters``).
         soma_data_root: SOMA-X assets dir override (None = auto-download).
         gc_interval: If > 0, run ``gc.collect()`` (+ CUDA cache trim) every N
@@ -84,19 +90,46 @@ class MotionRetargeter:
 
     def __init__(self, body_model: str = "smplx", body_model_path=None, gender: str = "neutral",
                  target_fps: float = 30.0, device: str = "cuda", robot: str = "unitree_g1",
+                 robot_model_path=None,
                  forward_chunk: int = 64, fit_chunk: int = 256, pad_fit_chunks: bool = True,
                  reuse_pose_inversion: bool = False, num_betas: int | None = None,
                  flat_hand_mean: bool = True, ik_config_overrides: dict | None = None,
                  fit_kwargs: dict | None = None, soma_data_root=None,
                  gc_interval: int = 0, verbose: bool = False):
+        from soma_retargeter.pipelines.robot_model import (
+            resolve_robot_model_path,
+            spec_requires_model_path,
+            validate_robot_model_spec,
+        )
+        from soma_retargeter.pipelines.utils import available_target_robots, get_retargeter_config
+
         if body_model not in _BODY_MODELS:
             raise ValueError(f"body_model must be one of {_BODY_MODELS}, got {body_model!r}")
         if gender not in _GENDERS:
             raise ValueError(f"gender must be one of {_GENDERS}, got {gender!r}")
-        if robot != "unitree_g1":
-            raise ValueError(f"robot {robot!r} is not supported (only 'unitree_g1')")
+        robots = available_target_robots()
+        if robot not in robots:
+            raise ValueError(
+                f"robot {robot!r} is not supported; available robots: {robots} (a robot is supported when "
+                "soma_retargeter/configs/<robot>/soma_to_<robot>_retargeter_config.json exists)")
         if body_model in _SMPL_FAMILY and body_model_path is None:
             raise ValueError(f"body_model_path is required for body_model={body_model!r}")
+
+        # Fail fast on the robot-model source: the config's spec must be well-formed, and robots
+        # without a downloadable asset need robot_model_path= now, not at first retarget.
+        self._retarget_config = get_retargeter_config("soma", robot)
+        if ik_config_overrides:
+            self._retarget_config.update(dict(ik_config_overrides))
+        spec = self._retarget_config.get("robot_model")
+        if spec is None:
+            raise ValueError(
+                f"retargeter config for robot {robot!r} has no 'robot_model' section; add one "
+                "(see configs/unitree_g1/soma_to_unitree_g1_retargeter_config.json)")
+        validate_robot_model_spec(spec, robot)
+        if robot_model_path is None and spec_requires_model_path(spec):
+            resolve_robot_model_path(spec, None, robot)  # raises, naming the kwarg
+        if robot_model_path is not None and not Path(robot_model_path).exists():
+            raise FileNotFoundError(f"robot_model_path for robot {robot!r} does not exist: {robot_model_path}")
 
         self.body_model = body_model
         self.body_model_path = body_model_path
@@ -104,6 +137,7 @@ class MotionRetargeter:
         self.target_fps = float(target_fps)
         self.device = device
         self.robot = robot
+        self.robot_model_path = robot_model_path
         self.forward_chunk = forward_chunk
         self.fit_chunk = fit_chunk
         self.pad_fit_chunks = pad_fit_chunks
@@ -116,7 +150,6 @@ class MotionRetargeter:
         self.gc_interval = gc_interval
         self.verbose = verbose
 
-        self.joint_names = unitree_g1_joint_names()
         self._template_skeleton = load_template_skeleton()
         self._template_parent_names = {
             name: (self._template_skeleton.joint_names[p] if p != -1 else None)
@@ -127,6 +160,12 @@ class MotionRetargeter:
         self._clips_done = 0
 
     # ------------------------------------------------------------------ public
+
+    @property
+    def joint_names(self) -> list[str]:
+        """``dof_pos`` column names, derived from the robot model's joint labels
+        (``joint_q`` order, free root skipped). First access builds the IK pipeline."""
+        return list(self._ensure_pipeline().joint_names)
 
     def retarget(self, poses, trans, *, source_fps: float, betas=None, gender: str | None = None) -> dict:
         """Retarget one SMPL-family clip.
@@ -331,17 +370,12 @@ class MotionRetargeter:
 
     def _ensure_pipeline(self):
         if self._pipeline is None:
-            from soma_retargeter.pipelines.utils import get_retargeter_config, get_source_type_from_str, get_target_type_from_str
             from soma_retargeter.retargeting.pipeline_cache import CachedNewtonPipeline
 
-            config = None
-            if self.ik_config_overrides:
-                config = get_retargeter_config(
-                    get_source_type_from_str("soma"), get_target_type_from_str(self.robot))
-                config.update(self.ik_config_overrides)
             self._pipeline = CachedNewtonPipeline(
                 self._template_skeleton, source_type="soma", robot_type=self.robot,
-                retarget_config=config, verbose=self.verbose)
+                retarget_config=dict(self._retarget_config),
+                robot_model_path=self.robot_model_path, verbose=self.verbose)
         return self._pipeline
 
     def _run_ik(self, buffers):
