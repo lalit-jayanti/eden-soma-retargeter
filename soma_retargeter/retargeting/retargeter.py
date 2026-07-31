@@ -78,6 +78,15 @@ class MotionRetargeter:
         gc_interval: If > 0, run ``gc.collect()`` (+ CUDA cache trim) every N
             clips as an internal backstop. 0 disables it.
         verbose: Enable the core pipeline's progress output.
+        enable_procedural_transforms: Forwarded to ``SOMALayer``. True
+            (py-soma-x's default) fits against its expanded twist-joint rig,
+            which requires procedural assets the public ``nvidia/soma-x``
+            snapshot does not ship — construction then fails, naming this kwarg.
+            False fits against the public 78-joint rig, which is what a stock
+            asset download supports. Both modes expose the same 78 public
+            joints, so ``joint_names`` and the returned arrays keep their shape
+            and meaning; the fitted rotations themselves differ, because
+            procedural mode refines the skin the fit is matched against.
 
     Every ``retarget*`` method returns (per clip) a dict::
 
@@ -95,7 +104,8 @@ class MotionRetargeter:
                  reuse_pose_inversion: bool = False, num_betas: int | None = None,
                  flat_hand_mean: bool = True, ik_config_overrides: dict | None = None,
                  fit_kwargs: dict | None = None, soma_data_root=None,
-                 gc_interval: int = 0, verbose: bool = False):
+                 gc_interval: int = 0, verbose: bool = False,
+                 enable_procedural_transforms: bool = True):
         from soma_retargeter.pipelines.robot_model import (
             resolve_robot_model_path,
             spec_requires_model_path,
@@ -149,6 +159,7 @@ class MotionRetargeter:
         self.soma_data_root = soma_data_root
         self.gc_interval = gc_interval
         self.verbose = verbose
+        self.enable_procedural_transforms = enable_procedural_transforms
 
         self._template_skeleton = load_template_skeleton()
         self._template_parent_names = {
@@ -357,6 +368,7 @@ class MotionRetargeter:
                 flat_hand_mean=self.flat_hand_mean,
                 soma_data_root=self.soma_data_root,
                 reuse_pose_inversion=self.reuse_pose_inversion,
+                enable_procedural_transforms=self.enable_procedural_transforms,
             )
             self._fit_contexts[gender] = ctx
         return ctx

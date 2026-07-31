@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.4.0]
+
+### Added
+- `MotionRetargeter(enable_procedural_transforms=...)`, threaded through
+  `FitContext` to `SOMALayer`. py-soma-x defaults to its expanded twist-joint
+  rig, whose procedural transform definition the public `nvidia/soma-x`
+  snapshot does not ship — so the default fit was unreachable for anyone using
+  stock assets, with no way to opt out (`fit_kwargs` reach
+  `PoseInversion.fit`, not the layer). Passing `False` fits against the public
+  78-joint rig. Both modes expose the same 78 public joints, so `joint_names`
+  and the returned arrays are unchanged in shape and meaning; the fitted
+  rotations differ, because procedural mode refines the skin the fit is matched
+  against. The kwarg is appended to the signature, so positional callers are
+  unaffected.
+- With procedural transforms on, the missing definition is now reported before
+  the layer is built, naming the file, the data root, and the kwarg that opts
+  out, instead of surfacing part-way through `SOMALayer.__init__`.
+
+### Changed
+- The `[fit]` extra now requires `py-soma-x>=0.2` (was `>=0.1.0`). 0.1.0 has no
+  procedural-transform rig and its `SOMALayer` does not accept
+  `enable_procedural_transforms`.
+
 ## [0.3.0]
 
 ### Added

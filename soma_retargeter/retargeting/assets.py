@@ -45,6 +45,49 @@ def resolve_body_model_path(body_model: str, body_model_path, gender: str) -> Pa
     raise FileNotFoundError(f"body_model_path {p} does not exist")
 
 
+def resolve_soma_data_root(soma_data_root=None) -> Path:
+    """The SOMA-X assets dir ``SOMALayer`` will actually use.
+
+    Mirrors the layer's own rule — a missing or ``None`` ``data_root`` falls back
+    to the auto-downloaded snapshot — so callers can inspect the real directory
+    before constructing the layer.
+
+    Args:
+        soma_data_root: Requested assets dir, or None for the default snapshot.
+    """
+    if soma_data_root is not None:
+        requested = Path(soma_data_root).expanduser()
+        if requested.exists():
+            return requested
+    from soma.assets import get_assets_dir
+
+    return Path(get_assets_dir())
+
+
+def check_procedural_transform_definition(soma_data_root) -> None:
+    """Raise ``FileNotFoundError`` unless ``soma_data_root`` has the procedural definition.
+
+    py-soma-x's expanded twist-joint rig needs a procedural transform definition
+    that the public ``nvidia/soma-x`` snapshot does not ship, and it discovers
+    that only once the layer is half-built. Checking up front lets the error name
+    the way out (fit against the public 78-joint rig instead). The rig also needs
+    a template USD; py-soma-x checks that one itself, naming the path.
+
+    Args:
+        soma_data_root: Resolved assets dir (see :func:`resolve_soma_data_root`).
+    """
+    from soma.procedural_transforms import SOMA_PROCEDURAL_TRANSFORM_DEFINITION_FILENAME
+
+    definition = Path(soma_data_root) / SOMA_PROCEDURAL_TRANSFORM_DEFINITION_FILENAME
+    if not definition.exists():
+        raise FileNotFoundError(
+            f"Procedural transforms require the SOMA procedural transform definition at '{definition}', "
+            "which the public nvidia/soma-x asset snapshot does not ship. Pass "
+            "enable_procedural_transforms=False to fit against the public 78-joint rig instead, or point "
+            "soma_data_root= at a snapshot that has the definition."
+        )
+
+
 def ensure_smplh_data_root(base_data_root=None) -> Path:
     """Build a SOMA-X data_root usable with ``identity_model_type='smplh'``.
 

@@ -68,17 +68,29 @@ class FitContext:
             corrupted — so callers default this to False. The shared low-LOD
             layer already removes the expensive per-clip rebuild, so a fresh
             instance per clip stays cheap.
+        enable_procedural_transforms: Passed to ``SOMALayer``. True (py-soma-x's
+            default) keeps the expanded twist-joint rig, which needs procedural
+            assets the public SOMA-X snapshot omits; False fits against the
+            public 78-joint rig. Either way the layer exposes the same 78 public
+            joints, so ``joint_names`` and everything downstream are unchanged —
+            but the fitted rotations differ, since procedural mode refines the
+            skin the fit is matched against.
     """
 
     def __init__(self, body_model: str, model_path: Path, gender: str, device,
                  num_betas: int | None, flat_hand_mean: bool,
-                 soma_data_root, reuse_pose_inversion: bool):
+                 soma_data_root, reuse_pose_inversion: bool,
+                 enable_procedural_transforms: bool = True):
         import smplx
         import torch
         from soma.pose_inversion import PoseInversion
         from soma.soma import SOMALayer
 
-        from soma_retargeter.retargeting.assets import ensure_smplh_data_root
+        from soma_retargeter.retargeting.assets import (
+            check_procedural_transform_definition,
+            ensure_smplh_data_root,
+            resolve_soma_data_root,
+        )
 
         if body_model not in _POSE_LAYOUT:
             raise ValueError(f"Unknown body model {body_model!r}; expected one of {sorted(_POSE_LAYOUT)}")
@@ -87,10 +99,15 @@ class FitContext:
         self._device = torch.device(device)
         self._reuse_pose_inversion = reuse_pose_inversion
         self._PoseInversion = PoseInversion
+        self.procedural_transforms_enabled = enable_procedural_transforms
 
         model_path = Path(model_path)
         if body_model == "smplh":
             soma_data_root = ensure_smplh_data_root(soma_data_root)
+        if enable_procedural_transforms:
+            # Resolve first so the check reads the directory the layer will use.
+            soma_data_root = resolve_soma_data_root(soma_data_root)
+            check_procedural_transform_definition(soma_data_root)
 
         identity_kwargs = {"model_path": str(model_path), "gender": gender}
         model_kwargs = {}
@@ -111,6 +128,8 @@ class FitContext:
             )
             # low_lod=True so PoseInversion reuses this layer directly instead
             # of silently rebuilding a second, low-LOD SOMALayer per instance.
+            # (Were it to rebuild, py-soma-x copies the procedural setting off
+            # this layer, so the flag below holds for the fit either way.)
             self._soma_layer = SOMALayer(
                 data_root=str(soma_data_root) if soma_data_root is not None else None,
                 low_lod=True,
@@ -118,6 +137,7 @@ class FitContext:
                 device=self._device,
                 mode="warp",
                 identity_model_kwargs=identity_kwargs,
+                enable_procedural_transforms=enable_procedural_transforms,
             )
         self._body_model = self._body_model.to(self._device)
 

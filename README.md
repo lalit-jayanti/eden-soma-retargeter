@@ -123,9 +123,12 @@ retarget raw AMASS-style body-model motion, not just SOMA BVH.
 ```python
 from soma_retargeter.retargeting import MotionRetargeter
 
-# SMPL-X -> Unitree G1 (fitting requires the [fit] extra)
+# SMPL-X -> Unitree G1 (fitting requires the [fit] extra).
+# enable_procedural_transforms=False fits against SOMA's public 78-joint rig;
+# see the note below before leaving it at py-soma-x's default.
 rt = MotionRetargeter(body_model="smplx", body_model_path="/path/to/SMPLX_NEUTRAL.npz",
-                      target_fps=30.0, device="cuda")
+                      target_fps=30.0, device="cuda",
+                      enable_procedural_transforms=False)
 out = rt.retarget(poses, trans, source_fps=120.0, betas=betas)   # AMASS layout arrays
 # out = {"root_pos" (T,3) m, "root_quat" (T,4) wxyz, "dof_pos" (T,29) rad,
 #        "joint_names" [29], "fps"}
@@ -151,6 +154,15 @@ pip install "eden-soma-retargeter[fit]"
 `retarget_batch([...])` retargets many clips in one IK solve (one env per clip).
 See the `MotionRetargeter` docstring for the full option set (per-call gender,
 chunk sizes, IK overrides, …).
+
+**Procedural transforms.** py-soma-x defaults to its expanded twist-joint rig,
+which needs a procedural transform definition (and template rig) that the public
+[`nvidia/soma-x`](https://huggingface.co/nvidia/soma-x) asset snapshot does not
+ship — the fit then fails at construction. Pass
+`enable_procedural_transforms=False` to fit against SOMA's public 78-joint rig,
+which stock assets do support. Both modes expose the same 78 public joints, so
+`joint_names` and the output arrays are unchanged; the fitted rotations differ,
+since procedural mode refines the skin the fit is matched against.
 
 ## Code Overview
 
